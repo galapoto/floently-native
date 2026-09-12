@@ -3,7 +3,6 @@ import AVFoundation
 import Combine
 import Foundation
 
-@MainActor
 final class ReadSpeechController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isPaused = false
@@ -101,16 +100,21 @@ final class ReadSpeechController: NSObject, ObservableObject, AVSpeechSynthesize
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        isSpeaking = false
-        isPaused = false
-        status = "Finished"
+        DispatchQueue.main.async { [weak self] in
+            self?.isSpeaking = false
+            self?.isPaused = false
+            self?.status = "Finished"
+        }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        isSpeaking = false
-        isPaused = false
-        if status != "Reading" {
-            status = "Ready"
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isSpeaking = false
+            self.isPaused = false
+            if self.status != "Reading" {
+                self.status = "Ready"
+            }
         }
     }
 
@@ -127,13 +131,6 @@ final class ReadSpeechController: NSObject, ObservableObject, AVSpeechSynthesize
     private func normalizedLanguage(_ candidate: String?) -> String {
         let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if value.isEmpty { return "en-US" }
-        if value.count == 2 {
-            let lower = value.lowercased()
-            let locale = Locale(identifier: lower)
-            if let region = locale.region?.identifier {
-                return "\(lower)-\(region)"
-            }
-        }
         return value.replacingOccurrences(of: "_", with: "-")
     }
 
