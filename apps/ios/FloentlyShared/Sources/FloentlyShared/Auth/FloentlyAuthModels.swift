@@ -30,6 +30,13 @@ public struct FloentlyUser: Codable, Equatable, Identifiable {
             ?? c.decodeIfPresent(String.self, forKey: .displayName)
             ?? c.decodeIfPresent(String.self, forKey: .fullName)
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(email, forKey: .email)
+        try c.encodeIfPresent(name, forKey: .name)
+    }
 }
 
 public struct FloentlyTokenPair: Codable, Equatable {
@@ -75,6 +82,13 @@ public struct FloentlyAuthSession: Codable, Equatable {
 
         refreshToken = try c.decodeIfPresent(String.self, forKey: .refreshToken)
             ?? tokens?.refreshToken
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(user, forKey: .user)
+        try c.encode(token, forKey: .token)
+        try c.encodeIfPresent(refreshToken, forKey: .refreshToken)
     }
 }
 
