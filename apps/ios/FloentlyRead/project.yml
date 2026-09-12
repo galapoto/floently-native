@@ -1,0 +1,47 @@
+name: FloentlyRead
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  FloentlyShared:
+    path: ../FloentlyShared
+targets:
+  FloentlyRead:
+    type: application
+    platform: iOS
+    sources:
+      - path: FloentlyRead
+        excludes:
+          - Info.plist
+          - FloentlyRead.entitlements
+    dependencies:
+      - package: FloentlyShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vitusidi.floently.read.native.dev
+        PRODUCT_NAME: FloentlyRead
+        SWIFT_VERSION: 5.9
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: FloentlyRead/FloentlyRead.entitlements
+    info:
+      path: FloentlyRead/Info.plist
+      properties:
+        CFBundleDisplayName: Floently Read
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleURLTypes:
+          - CFBundleURLName: com.vitusidi.floently.read
+            CFBundleURLSchemes:
+              - floentlyread
+        NSCameraUsageDescription: Floently Read only requests camera access when the website you are using asks for it.
+        NSMicrophoneUsageDescription: Floently Read only requests microphone access when the website you are using asks for it.
+        NSPhotoLibraryUsageDescription: Floently Read only requests photo access when a website file picker asks you to choose media.
