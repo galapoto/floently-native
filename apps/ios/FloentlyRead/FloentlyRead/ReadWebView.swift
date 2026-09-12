@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 struct ReadWebView: UIViewRepresentable {
@@ -45,9 +46,6 @@ struct ReadWebView: UIViewRepresentable {
         }
 
         func observe(_ webView: WKWebView) {
-            let keyPaths: [KeyPath<WKWebView, Any>] = []
-            _ = keyPaths
-
             observations = [
                 webView.observe(\.url, options: [.new]) { [weak self] webView, _ in self?.publish(webView) },
                 webView.observe(\.title, options: [.new]) { [weak self] webView, _ in self?.publish(webView) },
@@ -87,6 +85,13 @@ struct ReadWebView: UIViewRepresentable {
             publishFailure(error, webView: webView)
         }
 
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            Task { @MainActor [weak self] in
+                self?.controller?.readingStatus = "The page renderer restarted. Restoring the page…"
+            }
+            webView.reload()
+        }
+
         private func publishFailure(_ error: Error, webView: WKWebView) {
             Task { @MainActor [weak self] in
                 let nsError = error as NSError
@@ -106,7 +111,7 @@ struct ReadWebView: UIViewRepresentable {
                 return
             }
 
-            if scheme == "http" || scheme == "https" || scheme == "about" {
+            if ["http", "https", "about", "data", "blob"].contains(scheme) {
                 decisionHandler(.allow)
                 return
             }
@@ -123,8 +128,8 @@ struct ReadWebView: UIViewRepresentable {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
-            if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-                webView.load(URLRequest(url: url))
+            if navigationAction.targetFrame == nil {
+                webView.load(navigationAction.request)
             }
             return nil
         }
