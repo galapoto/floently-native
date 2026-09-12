@@ -2,6 +2,7 @@ import SwiftUI
 import FloentlyShared
 
 struct ReadBrowserView: View {
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = ReadBrowserController()
     let initialURL: URL?
 
@@ -17,31 +18,37 @@ struct ReadBrowserView: View {
                     .tint(palette.accent)
             }
 
-            ZStack(alignment: .bottom) {
-                ReadWebView(controller: controller)
-                    .ignoresSafeArea(edges: .bottom)
+            if controller.currentURL == nil {
+                browserStart
+            } else {
+                ZStack(alignment: .bottom) {
+                    ReadWebView(controller: controller)
+                        .ignoresSafeArea(edges: .bottom)
 
-                readStrip
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
+                    readStrip
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
             }
         }
         .background(palette.background)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .task {
-            if let initialURL {
+            if let initialURL, controller.currentURL == nil {
                 controller.open(url: initialURL)
-            } else if controller.currentURL == nil {
-                controller.open("https://read.floently.com")
             }
         }
     }
 
     private var browserToolbar: some View {
         HStack(spacing: 6) {
-            browserButton(systemName: "chevron.left", enabled: controller.canGoBack, label: "Back") {
-                controller.goBack()
+            browserButton(systemName: "chevron.left", enabled: true, label: "Back") {
+                if controller.canGoBack {
+                    controller.goBack()
+                } else {
+                    dismiss()
+                }
             }
 
             browserButton(systemName: "chevron.right", enabled: controller.canGoForward, label: "Forward") {
@@ -67,16 +74,46 @@ struct ReadBrowserView: View {
 
             browserButton(
                 systemName: controller.isLoading ? "xmark" : "arrow.clockwise",
-                enabled: true,
+                enabled: controller.currentURL != nil,
                 label: controller.isLoading ? "Stop loading" : "Reload"
             ) {
                 controller.isLoading ? controller.stopLoading() : controller.reload()
+            }
+
+            browserButton(systemName: "xmark.circle", enabled: true, label: "Close browser") {
+                dismiss()
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .frame(minHeight: 56)
         .background(palette.surface)
+    }
+
+    private var browserStart: some View {
+        VStack(spacing: 18) {
+            Spacer()
+
+            Image(systemName: "globe")
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(palette.accent)
+                .accessibilityHidden(true)
+
+            Text("Browse the real website")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(palette.text)
+
+            Text("Enter a course, article or website above. Read keeps the original page interactive and stays available while you navigate.")
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(palette.muted)
+                .frame(maxWidth: 420)
+
+            Spacer()
+        }
+        .padding(.horizontal, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.background)
     }
 
     private var readStrip: some View {
