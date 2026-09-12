@@ -4,6 +4,7 @@ import FloentlyShared
 struct ReadBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = ReadBrowserController()
+    @StateObject private var speech = ReadSpeechController()
     let initialURL: URL?
 
     private let palette = FloentlyPalette.read
@@ -38,6 +39,20 @@ struct ReadBrowserView: View {
             if let initialURL, controller.currentURL == nil {
                 controller.open(url: initialURL)
             }
+        }
+        .onChange(of: controller.extractedText) { _, text in
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            speech.speak(text)
+        }
+        .onChange(of: controller.selectionText) { _, text in
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            speech.speak(text)
+        }
+        .onChange(of: controller.currentURL) { _, _ in
+            speech.stop()
+        }
+        .onDisappear {
+            speech.stop()
         }
     }
 
@@ -119,37 +134,67 @@ struct ReadBrowserView: View {
     private var readStrip: some View {
         HStack(spacing: 8) {
             Button {
-                controller.readPage()
+                if speech.isSpeaking || speech.isPaused {
+                    speech.togglePauseResume()
+                } else {
+                    controller.extractedText = ""
+                    controller.readPage()
+                }
             } label: {
-                Label("Read page", systemImage: "play.fill")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .frame(height: 48)
-                    .background(palette.accent)
-                    .clipShape(Capsule())
+                Label(
+                    speech.isSpeaking ? "Pause" : speech.isPaused ? "Resume" : "Read page",
+                    systemImage: speech.isSpeaking ? "pause.fill" : "play.fill"
+                )
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(height: 48)
+                .background(palette.accent)
+                .clipShape(Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityHint("Reads the main visible lesson or article area without replacing the website")
 
             Button {
+                controller.selectionText = ""
                 controller.readSelection()
             } label: {
                 Image(systemName: "selection.pin.in.out")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.text)
-                    .frame(width: 48, height: 48)
+                    .frame(width: 44, height: 48)
                     .background(palette.elevated)
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read selected text")
 
-            Text(controller.readingStatus)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(palette.text.opacity(0.82))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                speech.cycleSpeed()
+            } label: {
+                Text(speech.speedLabel)
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(palette.text)
+                    .frame(width: 44, height: 48)
+                    .background(palette.elevated)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reading speed \(speech.speedLabel)")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(speech.isSpeaking || speech.isPaused ? speech.status : controller.readingStatus)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(palette.text.opacity(0.82))
+                    .lineLimit(1)
+                if speech.isSpeaking || speech.isPaused {
+                    Text(controller.pageTitle.isEmpty ? "Live page" : controller.pageTitle)
+                        .font(.caption2)
+                        .foregroundStyle(palette.muted)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(8)
         .background(.ultraThinMaterial)
