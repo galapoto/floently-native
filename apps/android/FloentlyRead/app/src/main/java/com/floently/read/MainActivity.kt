@@ -1,11 +1,11 @@
 package com.floently.read
 
 import android.Manifest
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.Message
@@ -20,7 +20,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.net.http.SslError
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,8 +36,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -59,11 +59,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import com.floently.shared.design.FloentlyProduct
 import com.floently.shared.design.floentlyPalette
 import org.json.JSONTokener
@@ -120,6 +119,9 @@ private fun ReadBrowserScreen(
     var extractedText by remember { mutableStateOf("") }
     var selectedText by remember { mutableStateOf("") }
     var rendererGeneration by remember { mutableIntStateOf(0) }
+    var rendererCrashUrl by remember { mutableStateOf<String?>(null) }
+    var rendererCrashCount by remember { mutableIntStateOf(0) }
+    var rendererRecoveryBlocked by remember { mutableStateOf(false) }
     var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var pendingPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
 
@@ -157,6 +159,12 @@ private fun ReadBrowserScreen(
         canGoForward = view.canGoForward()
     }
 
+    fun resetRendererRecovery() {
+        rendererCrashUrl = null
+        rendererCrashCount = 0
+        rendererRecoveryBlocked = false
+    }
+
     fun openExternal(uri: Uri) {
         try {
             context.startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -171,6 +179,7 @@ private fun ReadBrowserScreen(
             readingStatus = "Enter a valid website address or search term."
             return
         }
+        resetRendererRecovery()
         addressText = target
         currentUrl = target
         extractedText = ""
@@ -224,8 +233,8 @@ private fun ReadBrowserScreen(
                 onValueChange = { addressText = it },
                 singleLine = true,
                 placeholder = { Text("Search or enter website") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                keyboardActions = KeyboardActions(onDone = { openAddress(addressText) }),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { openAddress(addressText) }),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .weight(1f)
@@ -250,217 +259,261 @@ private fun ReadBrowserScreen(
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (currentUrl == null) {
-                BrowserStart(paletteText = palette.text, paletteMuted = palette.muted, paletteAccent = palette.accent)
-            } else {
-                key(rendererGeneration) {
-                    AndroidView(
-                        factory = { androidContext ->
-                            WebView(androidContext).apply {
-                                webView = this
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.databaseEnabled = true
-                                settings.setSupportMultipleWindows(true)
-                                settings.javaScriptCanOpenWindowsAutomatically = true
-                                settings.allowFileAccess = false
-                                settings.allowContentAccess = true
-                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    settings.safeBrowsingEnabled = true
-                                }
-
-                                CookieManager.getInstance().setAcceptCookie(true)
-                                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-
-                                webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                                        val uri = request.url
-                                        return when (uri.scheme?.lowercase()) {
-                                            "http", "https", "about", "data", "blob" -> false
-                                            else -> {
-                                                openExternal(uri)
-                                                true
-                                            }
-                                        }
-                                    }
-
-                                    override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                                        isLoading = true
-                                        readingStatus = "Loading…"
-                                        updateNavigation(view, url)
-                                    }
-
-                                    override fun onPageFinished(view: WebView, url: String?) {
-                                        isLoading = false
-                                        updateNavigation(view, url)
-                                        readingStatus = if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
-                                            "Finish signing in. Read will wait until you return to the website."
-                                        } else {
-                                            "Ready"
-                                        }
-                                    }
-
-                                    override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-                                        updateNavigation(view, url)
-                                    }
-
-                                    override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                                        if (request.isForMainFrame) {
-                                            readingStatus = "Page failed to load: ${'$'}{error.description}"
-                                        }
-                                    }
-
-                                    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                                        handler.cancel()
-                                        readingStatus = "This website has a certificate problem. Read did not bypass it."
-                                    }
-
-                                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                                        currentUrl = view.url ?: currentUrl
-                                        readingStatus = "The page renderer restarted. Restoring the page…"
-                                        webView = null
-                                        view.destroy()
-                                        rendererGeneration += 1
-                                        return true
-                                    }
-                                }
-
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onProgressChanged(view: WebView, newProgress: Int) {
-                                        progress = newProgress
-                                        isLoading = newProgress < 100
-                                        updateNavigation(view)
-                                    }
-
-                                    override fun onReceivedTitle(view: WebView, title: String?) {
-                                        updateNavigation(view)
-                                    }
-
-                                    override fun onCreateWindow(
-                                        view: WebView,
-                                        isDialog: Boolean,
-                                        isUserGesture: Boolean,
-                                        resultMsg: Message
-                                    ): Boolean {
-                                        val popup = WebView(view.context)
-                                        popup.webViewClient = object : WebViewClient() {
-                                            override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                                val uri = request.url
-                                                when (uri.scheme?.lowercase()) {
-                                                    "http", "https" -> view.loadUrl(uri.toString())
-                                                    else -> openExternal(uri)
-                                                }
-                                                popupView.stopLoading()
-                                                popupView.destroy()
-                                                return true
-                                            }
-
-                                            override fun onPageStarted(popupView: WebView, url: String?, favicon: Bitmap?) {
-                                                if (!url.isNullOrBlank() && url != "about:blank") {
-                                                    ReadBrowserPolicy.normalizeAddress(url)?.let(view::loadUrl)
-                                                    popupView.stopLoading()
-                                                    popupView.destroy()
-                                                }
-                                            }
-                                        }
-                                        (resultMsg.obj as? WebView.WebViewTransport)?.webView = popup
-                                        resultMsg.sendToTarget()
-                                        return true
-                                    }
-
-                                    override fun onShowFileChooser(
-                                        webView: WebView,
-                                        filePath: ValueCallback<Array<Uri>>,
-                                        fileChooserParams: FileChooserParams
-                                    ): Boolean {
-                                        filePathCallback?.onReceiveValue(null)
-                                        filePathCallback = filePath
-                                        return try {
-                                            fileChooserLauncher.launch(fileChooserParams.createIntent())
-                                            true
-                                        } catch (_: ActivityNotFoundException) {
-                                            filePathCallback?.onReceiveValue(null)
-                                            filePathCallback = null
-                                            false
-                                        }
-                                    }
-
-                                    override fun onPermissionRequest(request: PermissionRequest) {
-                                        val permissions = buildList {
-                                            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in request.resources) add(Manifest.permission.CAMERA)
-                                            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in request.resources) add(Manifest.permission.RECORD_AUDIO)
-                                        }
-                                        if (permissions.isEmpty()) {
-                                            request.deny()
-                                            return
-                                        }
-                                        pendingPermissionRequest = request
-                                        webPermissionLauncher.launch(permissions.distinct().toTypedArray())
-                                    }
-
-                                    override fun onPermissionRequestCanceled(request: PermissionRequest) {
-                                        if (pendingPermissionRequest === request) pendingPermissionRequest = null
-                                    }
-                                }
-
-                                setDownloadListener { url, _, _, _, _ ->
-                                    runCatching { openExternal(Uri.parse(url)) }
-                                }
-
-                                currentUrl?.let { loadUrl(it) }
-                            }
-                        },
-                        update = { view ->
-                            webView = view
-                            updateNavigation(view)
-                        },
-                        modifier = Modifier.fillMaxSize()
+            when {
+                currentUrl == null -> {
+                    BrowserStart(
+                        paletteText = palette.text,
+                        paletteMuted = palette.muted,
+                        paletteAccent = palette.accent
                     )
                 }
 
-                ReadStrip(
-                    status = readingStatus,
-                    accent = palette.accent,
-                    surface = palette.backgroundBottom,
-                    textColor = palette.text,
-                    onReadPage = {
-                        val view = webView
-                        val url = view?.url
-                        if (view == null || url.isNullOrBlank()) return@ReadStrip
-                        if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
-                            readingStatus = "Finish signing in before using Read on this page."
-                            return@ReadStrip
+                rendererRecoveryBlocked -> {
+                    RendererRecovery(
+                        url = currentUrl.orEmpty(),
+                        paletteText = palette.text,
+                        paletteMuted = palette.muted,
+                        paletteAccent = palette.accent,
+                        onRetry = {
+                            rendererCrashCount = 0
+                            rendererRecoveryBlocked = false
+                            rendererGeneration += 1
+                            readingStatus = "Trying the page again…"
                         }
-                        readingStatus = "Finding the main reading area…"
-                        view.evaluateJavascript(ReadBrowserPolicy.pageExtractionJavaScript) { result ->
-                            val text = decodeJavascriptString(result).trim()
-                            extractedText = text
-                            val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
-                            readingStatus = if (words == 0) {
-                                "No readable lesson or article text was found on the visible page."
-                            } else {
-                                "Ready to read $words words from the live page."
+                    )
+                }
+
+                else -> {
+                    key(rendererGeneration) {
+                        AndroidView(
+                            factory = { androidContext ->
+                                WebView(androidContext).apply {
+                                    webView = this
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.databaseEnabled = true
+                                    settings.setSupportMultipleWindows(true)
+                                    settings.javaScriptCanOpenWindowsAutomatically = true
+                                    settings.allowFileAccess = false
+                                    settings.allowContentAccess = true
+                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        settings.safeBrowsingEnabled = true
+                                    }
+
+                                    CookieManager.getInstance().setAcceptCookie(true)
+                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                                    webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                            val uri = request.url
+                                            return when (uri.scheme?.lowercase()) {
+                                                "http", "https", "about", "data", "blob" -> false
+                                                else -> {
+                                                    openExternal(uri)
+                                                    true
+                                                }
+                                            }
+                                        }
+
+                                        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                                            isLoading = true
+                                            readingStatus = "Loading…"
+                                            updateNavigation(view, url)
+                                        }
+
+                                        override fun onPageFinished(view: WebView, url: String?) {
+                                            isLoading = false
+                                            updateNavigation(view, url)
+                                            // A completed page proves the replacement renderer is healthy.
+                                            rendererCrashUrl = null
+                                            rendererCrashCount = 0
+                                            rendererRecoveryBlocked = false
+                                            readingStatus = if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
+                                                "Finish signing in. Read will wait until you return to the website."
+                                            } else {
+                                                "Ready"
+                                            }
+                                        }
+
+                                        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                                            updateNavigation(view, url)
+                                        }
+
+                                        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                                            if (request.isForMainFrame) {
+                                                readingStatus = "Page failed to load: ${error.description}"
+                                            }
+                                        }
+
+                                        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                                            handler.cancel()
+                                            readingStatus = "This website has a certificate problem. Read did not bypass it."
+                                        }
+
+                                        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                                            val crashedUrl = view.url ?: currentUrl
+                                            currentUrl = crashedUrl
+                                            if (crashedUrl != null && crashedUrl == rendererCrashUrl) {
+                                                rendererCrashCount += 1
+                                            } else {
+                                                rendererCrashUrl = crashedUrl
+                                                rendererCrashCount = 1
+                                            }
+
+                                            webView = null
+                                            view.destroy()
+
+                                            if (detail.didCrash() && rendererCrashCount >= 2) {
+                                                // Android explicitly warns against endlessly reloading a page that
+                                                // repeatedly crashes the renderer. Stop and require a user retry.
+                                                rendererRecoveryBlocked = true
+                                                isLoading = false
+                                                readingStatus = "This page repeatedly crashed the web renderer. Automatic reload was stopped."
+                                            } else {
+                                                readingStatus = "The page renderer restarted. Restoring the page…"
+                                                rendererGeneration += 1
+                                            }
+                                            return true
+                                        }
+                                    }
+
+                                    webChromeClient = object : WebChromeClient() {
+                                        override fun onProgressChanged(view: WebView, newProgress: Int) {
+                                            progress = newProgress
+                                            isLoading = newProgress < 100
+                                            updateNavigation(view)
+                                        }
+
+                                        override fun onReceivedTitle(view: WebView, title: String?) {
+                                            updateNavigation(view)
+                                        }
+
+                                        override fun onCreateWindow(
+                                            view: WebView,
+                                            isDialog: Boolean,
+                                            isUserGesture: Boolean,
+                                            resultMsg: Message
+                                        ): Boolean {
+                                            val popup = WebView(view.context)
+                                            popup.webViewClient = object : WebViewClient() {
+                                                override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
+                                                    val uri = request.url
+                                                    when (uri.scheme?.lowercase()) {
+                                                        "http", "https" -> view.loadUrl(uri.toString())
+                                                        else -> openExternal(uri)
+                                                    }
+                                                    popupView.stopLoading()
+                                                    popupView.destroy()
+                                                    return true
+                                                }
+
+                                                override fun onPageStarted(popupView: WebView, url: String?, favicon: Bitmap?) {
+                                                    if (!url.isNullOrBlank() && url != "about:blank") {
+                                                        ReadBrowserPolicy.normalizeAddress(url)?.let(view::loadUrl)
+                                                        popupView.stopLoading()
+                                                        popupView.destroy()
+                                                    }
+                                                }
+                                            }
+                                            (resultMsg.obj as? WebView.WebViewTransport)?.webView = popup
+                                            resultMsg.sendToTarget()
+                                            return true
+                                        }
+
+                                        override fun onShowFileChooser(
+                                            webView: WebView,
+                                            filePath: ValueCallback<Array<Uri>>,
+                                            fileChooserParams: FileChooserParams
+                                        ): Boolean {
+                                            filePathCallback?.onReceiveValue(null)
+                                            filePathCallback = filePath
+                                            return try {
+                                                fileChooserLauncher.launch(fileChooserParams.createIntent())
+                                                true
+                                            } catch (_: ActivityNotFoundException) {
+                                                filePathCallback?.onReceiveValue(null)
+                                                filePathCallback = null
+                                                false
+                                            }
+                                        }
+
+                                        override fun onPermissionRequest(request: PermissionRequest) {
+                                            val permissions = buildList {
+                                                if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in request.resources) add(Manifest.permission.CAMERA)
+                                                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in request.resources) add(Manifest.permission.RECORD_AUDIO)
+                                            }
+                                            if (permissions.isEmpty()) {
+                                                request.deny()
+                                                return
+                                            }
+                                            pendingPermissionRequest = request
+                                            webPermissionLauncher.launch(permissions.distinct().toTypedArray())
+                                        }
+
+                                        override fun onPermissionRequestCanceled(request: PermissionRequest) {
+                                            if (pendingPermissionRequest === request) pendingPermissionRequest = null
+                                        }
+                                    }
+
+                                    setDownloadListener { url, _, _, _, _ ->
+                                        runCatching { openExternal(Uri.parse(url)) }
+                                    }
+
+                                    currentUrl?.let { loadUrl(it) }
+                                }
+                            },
+                            update = { view ->
+                                webView = view
+                                updateNavigation(view)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    ReadStrip(
+                        status = readingStatus,
+                        accent = palette.accent,
+                        surface = palette.backgroundBottom,
+                        textColor = palette.text,
+                        onReadPage = {
+                            val view = webView
+                            val url = view?.url
+                            if (view == null || url.isNullOrBlank()) return@ReadStrip
+                            if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
+                                readingStatus = "Finish signing in before using Read on this page."
+                                return@ReadStrip
                             }
-                        }
-                    },
-                    onReadSelection = {
-                        val view = webView
-                        val url = view?.url
-                        if (view == null || url.isNullOrBlank()) return@ReadStrip
-                        if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
-                            readingStatus = "Finish signing in before using Read on this page."
-                            return@ReadStrip
-                        }
-                        view.evaluateJavascript(ReadBrowserPolicy.selectionExtractionJavaScript) { result ->
-                            selectedText = decodeJavascriptString(result).trim()
-                            readingStatus = if (selectedText.isBlank()) "Select text on the page first." else "Selection ready to read."
-                        }
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                )
+                            readingStatus = "Finding the main reading area…"
+                            view.evaluateJavascript(ReadBrowserPolicy.pageExtractionJavaScript) { result ->
+                                val text = decodeJavascriptString(result).trim()
+                                extractedText = text
+                                val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
+                                readingStatus = if (words == 0) {
+                                    "No readable lesson or article text was found on the visible page."
+                                } else {
+                                    "Ready to read $words words from the live page."
+                                }
+                            }
+                        },
+                        onReadSelection = {
+                            val view = webView
+                            val url = view?.url
+                            if (view == null || url.isNullOrBlank()) return@ReadStrip
+                            if (ReadBrowserPolicy.isProtectedAuthenticationUrl(url)) {
+                                readingStatus = "Finish signing in before using Read on this page."
+                                return@ReadStrip
+                            }
+                            view.evaluateJavascript(ReadBrowserPolicy.selectionExtractionJavaScript) { result ->
+                                selectedText = decodeJavascriptString(result).trim()
+                                readingStatus = if (selectedText.isBlank()) "Select text on the page first." else "Selection ready to read."
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                }
             }
         }
     }
@@ -484,6 +537,35 @@ private fun BrowserStart(paletteText: Color, paletteMuted: Color, paletteAccent:
             color = paletteMuted,
             style = MaterialTheme.typography.bodyLarge
         )
+    }
+}
+
+@Composable
+private fun RendererRecovery(
+    url: String,
+    paletteText: Color,
+    paletteMuted: Color,
+    paletteAccent: Color,
+    onRetry: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(28.dp)
+    ) {
+        Text("Page paused", color = paletteText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "The web renderer crashed more than once while loading ${Uri.parse(url).host ?: "this site"}. Read stopped automatic reloads to avoid a crash loop.",
+            color = paletteMuted,
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(Modifier.height(18.dp))
+        Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = paletteAccent)) {
+            Text("Try again")
+        }
     }
 }
 
