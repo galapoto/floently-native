@@ -1,0 +1,242 @@
+name: Read TestFlight Today
+
+on:
+  push:
+    branches:
+      - release/read-testflight-today-0332
+    paths:
+      - "apps/ios/FloentlyRead/**"
+      - ".github/workflows/read-testflight-today.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Floently Read project
+        working-directory: apps/ios/FloentlyRead
+        run: xcodegen generate
+
+      - name: Build simulator smoke gate
+        working-directory: apps/ios/FloentlyRead
+        run: >-
+          xcodebuild
+          -project FloentlyRead.xcodeproj
+          -scheme FloentlyRead
+          -sdk iphonesimulator
+          -configuration Debug
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Resolve available signing credentials
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEAM="${APPLE_TEAM_ID:-${IOS_TEAM_ID:-}}"
+          KEY_ID="${APP_STORE_CONNECT_KEY_ID:-${ASC_KEY_ID:-}}"
+          ISSUER_ID="${APP_STORE_CONNECT_ISSUER_ID:-${ASC_ISSUER_ID:-}}"
+          PRIVATE_KEY="${APP_STORE_CONNECT_API_KEY:-${APP_STORE_CONNECT_PRIVATE_KEY:-${ASC_PRIVATE_KEY:-}}}"
+          CERT="${IOS_DISTRIBUTION_CERTIFICATE_BASE64:-${APPLE_CERTIFICATE_P12_BASE64:-}}"
+          CERT_PASSWORD="${IOS_DISTRIBUTION_CERTIFICATE_PASSWORD:-${APPLE_CERTIFICATE_PASSWORD:-}}"
+          PROFILE="${IOS_PROVISIONING_PROFILE_BASE64:-${APPLE_PROVISIONING_PROFILE_BASE64:-}}"
+
+          echo "team_present=$([[ -n "$TEAM" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "api_key_present=$([[ -n "$KEY_ID" && -n "$ISSUER_ID" && -n "$PRIVATE_KEY" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "manual_signing_present=$([[ -n "$CERT" && -n "$CERT_PASSWORD" && -n "$PROFILE" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "apple_id_upload_present=$([[ -n "${APPLE_ID:-}" && -n "${APP_SPECIFIC_PASSWORD:-}" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          echo "READ_TESTFLIGHT_TEAM_PRESENT=$([[ -n "$TEAM" ]] && echo true || echo false)"
+          echo "READ_TESTFLIGHT_API_KEY_PRESENT=$([[ -n "$KEY_ID" && -n "$ISSUER_ID" && -n "$PRIVATE_KEY" ]] && echo true || echo false)"
+          echo "READ_TESTFLIGHT_MANUAL_SIGNING_PRESENT=$([[ -n "$CERT" && -n "$CERT_PASSWORD" && -n "$PROFILE" ]] && echo true || echo false)"
+          echo "READ_TESTFLIGHT_APPLE_ID_UPLOAD_PRESENT=$([[ -n "${APPLE_ID:-}" && -n "${APP_SPECIFIC_PASSWORD:-}" ]] && echo true || echo false)"
+
+          if [[ -z "$TEAM" ]]; then
+            echo "No Apple Team ID is available to this repository. Simulator build passed; TestFlight signing is blocked."
+            exit 0
+          fi
+
+          echo "APPLE_TEAM_RESOLVED=$TEAM" >> "$GITHUB_ENV"
+          echo "ASC_KEY_ID_RESOLVED=$KEY_ID" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_RESOLVED=$ISSUER_ID" >> "$GITHUB_ENV"
+
+          if [[ -n "$PRIVATE_KEY" ]]; then
+            python3 - <<'PY'
+          import base64, os, pathlib
+          value = os.environ.get('APP_STORE_CONNECT_API_KEY') or os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY') or os.environ.get('ASC_PRIVATE_KEY') or ''
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'AuthKey.p8'
+          if 'BEGIN PRIVATE KEY' in value:
+              target.write_text(value.replace('\\n', '\n'))
+          else:
+              target.write_bytes(base64.b64decode(value))
+          PY
+            mkdir -p "$HOME/.appstoreconnect/private_keys"
+            cp "$RUNNER_TEMP/AuthKey.p8" "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+          fi
+
+          if [[ -n "$CERT" && -n "$PROFILE" ]]; then
+            python3 - <<'PY'
+          import base64, os, pathlib
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'distribution.p12').write_bytes(base64.b64decode(os.environ.get('IOS_DISTRIBUTION_CERTIFICATE_BASE64') or os.environ.get('APPLE_CERTIFICATE_P12_BASE64') or ''))
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'profile.mobileprovision').write_bytes(base64.b64decode(os.environ.get('IOS_PROVISIONING_PROFILE_BASE64') or os.environ.get('APPLE_PROVISIONING_PROFILE_BASE64') or ''))
+          PY
+            KEYCHAIN="$RUNNER_TEMP/read-signing.keychain-db"
+            KEYCHAIN_PASSWORD="temporary-read-ci-keychain"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security import "$RUNNER_TEMP/distribution.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+            security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+            PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+            echo "PROFILE_NAME_RESOLVED=$PROFILE_NAME" >> "$GITHUB_ENV"
+            echo "READ_TESTFLIGHT_SIGNING_MODE=manual" >> "$GITHUB_ENV"
+          else
+            echo "READ_TESTFLIGHT_SIGNING_MODE=automatic" >> "$GITHUB_ENV"
+          fi
+
+      - name: Stop cleanly when signing is unavailable
+        if: steps.signing.outputs.team_present != 'true'
+        run: |
+          echo "READ_TESTFLIGHT_UPLOAD=BLOCKED_MISSING_APPLE_TEAM_CREDENTIAL"
+          echo "The installable app cannot be produced until an Apple Team ID/signing credential is connected to this repository."
+
+      - name: Archive signed iPhone app
+        if: steps.signing.outputs.team_present == 'true'
+        working-directory: apps/ios/FloentlyRead
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXTRA_SIGNING_ARGS=(
+            DEVELOPMENT_TEAM="$APPLE_TEAM_RESOLVED"
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+          )
+
+          if [[ "${READ_TESTFLIGHT_SIGNING_MODE:-automatic}" == "manual" ]]; then
+            EXTRA_SIGNING_ARGS+=(
+              CODE_SIGN_STYLE=Manual
+              CODE_SIGN_IDENTITY="Apple Distribution"
+              PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME_RESOLVED"
+            )
+          else
+            EXTRA_SIGNING_ARGS+=(CODE_SIGN_STYLE=Automatic)
+          fi
+
+          AUTH_ARGS=()
+          if [[ -n "${ASC_KEY_ID_RESOLVED:-}" && -n "${ASC_ISSUER_ID_RESOLVED:-}" && -f "$RUNNER_TEMP/AuthKey.p8" ]]; then
+            AUTH_ARGS=(
+              -allowProvisioningUpdates
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8"
+              -authenticationKeyID "$ASC_KEY_ID_RESOLVED"
+              -authenticationKeyIssuerID "$ASC_ISSUER_ID_RESOLVED"
+            )
+          fi
+
+          xcodebuild \
+            -project FloentlyRead.xcodeproj \
+            -scheme FloentlyRead \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/FloentlyRead.xcarchive" \
+            "${AUTH_ARGS[@]}" \
+            "${EXTRA_SIGNING_ARGS[@]}" \
+            archive
+
+      - name: Export App Store Connect IPA
+        if: steps.signing.outputs.team_present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNING_STYLE="automatic"
+          PROFILE_BLOCK=""
+          if [[ "${READ_TESTFLIGHT_SIGNING_MODE:-automatic}" == "manual" ]]; then
+            SIGNING_STYLE="manual"
+            PROFILE_BLOCK="<key>provisioningProfiles</key><dict><key>com.vitusidi.floently.read</key><string>${PROFILE_NAME_RESOLVED}</string></dict>"
+          fi
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${APPLE_TEAM_RESOLVED}</string>
+            <key>signingStyle</key><string>${SIGNING_STYLE}</string>
+            <key>stripSwiftSymbols</key><true/>
+            <key>uploadBitcode</key><false/>
+            ${PROFILE_BLOCK}
+          </dict></plist>
+          PLIST
+
+          AUTH_ARGS=()
+          if [[ -n "${ASC_KEY_ID_RESOLVED:-}" && -n "${ASC_ISSUER_ID_RESOLVED:-}" && -f "$RUNNER_TEMP/AuthKey.p8" ]]; then
+            AUTH_ARGS=(
+              -allowProvisioningUpdates
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8"
+              -authenticationKeyID "$ASC_KEY_ID_RESOLVED"
+              -authenticationKeyIssuerID "$ASC_ISSUER_ID_RESOLVED"
+            )
+          fi
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/FloentlyRead.xcarchive" \
+            -exportPath "$RUNNER_TEMP/FloentlyReadExport" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            "${AUTH_ARGS[@]}"
+          ls -la "$RUNNER_TEMP/FloentlyReadExport"
+
+      - name: Upload Read to TestFlight with App Store Connect API key
+        if: steps.signing.outputs.team_present == 'true' && steps.signing.outputs.api_key_present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA=$(find "$RUNNER_TEMP/FloentlyReadExport" -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          xcrun altool --upload-app --type ios --file "$IPA" --apiKey "$ASC_KEY_ID_RESOLVED" --apiIssuer "$ASC_ISSUER_ID_RESOLVED"
+          echo "READ_TESTFLIGHT_UPLOAD=SUBMITTED"
+
+      - name: Upload Read to TestFlight with Apple ID fallback
+        if: steps.signing.outputs.team_present == 'true' && steps.signing.outputs.api_key_present != 'true' && steps.signing.outputs.apple_id_upload_present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA=$(find "$RUNNER_TEMP/FloentlyReadExport" -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          xcrun altool --upload-app --type ios --file "$IPA" --username "$APPLE_ID" --password "$APP_SPECIFIC_PASSWORD"
+          echo "READ_TESTFLIGHT_UPLOAD=SUBMITTED"
+
+      - name: Explain upload credential blocker
+        if: steps.signing.outputs.team_present == 'true' && steps.signing.outputs.api_key_present != 'true' && steps.signing.outputs.apple_id_upload_present != 'true'
+        run: |
+          echo "READ_TESTFLIGHT_UPLOAD=BLOCKED_MISSING_UPLOAD_CREDENTIAL"
+          echo "The signed IPA can be produced, but App Store Connect upload credentials are not connected to this repository."
