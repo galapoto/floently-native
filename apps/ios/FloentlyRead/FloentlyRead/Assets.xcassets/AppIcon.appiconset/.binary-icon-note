@@ -1,0 +1,1 @@
+Binary icon will be supplied by the release build pipeline from the checked-in base64 source before Xcode builds the archive.
