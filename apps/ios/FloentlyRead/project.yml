@@ -19,10 +19,13 @@ targets:
       - package: FloentlyShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vitusidi.floently.read.native.dev
+        PRODUCT_BUNDLE_IDENTIFIER: com.vitusidi.floently.read
         PRODUCT_NAME: FloentlyRead
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: 5.9
         TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: FloentlyRead/FloentlyRead.entitlements
     info:
       path: FloentlyRead/Info.plist
